@@ -76,6 +76,7 @@ contract DCAcontract {
     
     uint public relayersCount = 0;
     mapping(uint => address) public relayers;
+    mapping(address => uint) public relayers_existance;
     
 
     // at creation, define who is the contract creator
@@ -140,15 +141,18 @@ contract DCAcontract {
         // this is a FIFO list which will assign to each relayer a "time window" of 240 seconds to execute the DCA transaction.
         // the reason for this architecture is to allow everyone to be a relayer, but at the same time discourage gas bidding competition
         // which would ultimately damage the end user (who is paying for the gas)
+        
+        // first require that this relayers is not already in the list
+        require(relayers_existance[msg.sender] != 1);
         relayers[relayersCount] = msg.sender;
         relayersCount ++;
+        relayers_existance[msg.sender] = 1;
     }
     
 
     // allow a relayer to execute the transaction for a user and convert his DAI parcel into ETH
     function convertParcel(address payable _user) external{
         Stream storage s = streams[_user];
-        uint256 ready_since = now - (s.lastSwap + s.interval);
         uint256 gasPrice = tx.gasprice;
         uint256 eth_bought = IUniswapExchange(0x2a1530C4C41db0B0b2bB646CB5Eb1A67b7158667).getTokenToEthInputPrice(s.parcel);
         
@@ -156,7 +160,7 @@ contract DCAcontract {
         //    a) that a stream was created for the user in the past (s.created == 1)
         //    b) that the stream is active (s.isactive == 1)
         //    c) that enough time has passed since the last swap (ready_since>=0)
-        //    d) that the estimated gas cost is below 2% of the returned amount from Uniswap; otherwise don't let  transaction take place
+        //    d) that the estimated gas cost is below 3% of the returned amount from Uniswap; otherwise don't let  transaction take place
         //    e) that the current time window is open for this relayer
         //
         // starting from the top relayer in the list, each relayer will have a "time windows" of 240 seconds assigned to make the transaction
@@ -164,16 +168,24 @@ contract DCAcontract {
         // the first relayer that sends the transaction will move up in the list by one position.
         // this will allow anyone to be a relayer, while discouraging bidding with a high gas price which would ultimately damage the end user
         
-        uint relayer_allowed_index = ready_since / 240;
-        if (relayer_allowed_index > relayersCount - 1){
-            relayer_allowed_index = 0;
-        }
-        address relayer_allowed = relayers[relayer_allowed_index];
+        address relayer_allowed = 0x0000000000000000000000000000000000000000;
+        uint relayer_allowed_index = 0;
+        uint multiple = 0;
         
+        if (s.lastSwap == 0){
+            multiple = (now - s.startTime) / (240 * relayersCount);
+            relayer_allowed_index = ((now - s.startTime) - multiple * (240 * relayersCount)) / 240;
+            relayer_allowed = relayers[relayer_allowed_index];
+        } else {
+            multiple = (now - s.lastSwap - s.interval) / (240 * relayersCount);
+            relayer_allowed_index = ((now - s.lastSwap - s.interval) - multiple * (240 * relayersCount)) / 240;
+            relayer_allowed = relayers[relayer_allowed_index];
+        }
+
         require(s.created == 1 && 
                 s.isactive == 1 &&
-                ready_since >= 0 &&
-                gasPrice * gas_consumption < eth_bought * 2 / 100 &&
+                now > s.lastSwap + s.interval &&
+                gasPrice * gas_consumption < eth_bought * 3 / 100 &&
                 relayer_allowed == msg.sender);
         
         // if all the conditions are satisfied, proceed with the swap
@@ -243,15 +255,34 @@ contract DCAcontract {
         }
     }
     
+    // check that the gas price that we are planning to use doesn't exceed 3% of the ethereum received
+    // NOTE: this function needs to return 1 for the transaction to be possible
+    function check_gas_price(address payable _user, uint _gasPrice) public view returns(uint){
+        Stream storage s = streams[_user];
+        uint256 eth_bought = IUniswapExchange(0x2a1530C4C41db0B0b2bB646CB5Eb1A67b7158667).getTokenToEthInputPrice(s.parcel);
+        if (_gasPrice * gas_consumption < eth_bought * 3 / 100){
+            // the gas price that the relayer plans to adopt is ok
+            return 1;
+            
+        } else {
+            // the gas price that the relayer plans to adopt is too high
+            return 0;
+        }
+    }
     
     // check what relayer is currently allowed to execute the transaction
     // NOTE: this function needs to return your address for you to be allowed as a relayer to execute the transaction and obtain the fee
     function check_allowed_relayer(address payable _user) public view returns(address){
         Stream storage s = streams[_user];
-        if (now - (s.lastSwap + s.interval) < 0){
+        if (now < s.lastSwap + s.interval){
             return 0x0000000000000000000000000000000000000000;
-        } else{
-            uint relayer_allowed_index = (now - (s.lastSwap + s.interval)) / 240;
+        } else if (s.lastSwap == 0){
+            uint multiple = (now - s.startTime) / (240 * relayersCount);
+            uint relayer_allowed_index = ((now - s.startTime) - multiple * (240 * relayersCount)) / 240;
+            return relayers[relayer_allowed_index];
+        } else {
+            uint multiple = (now - s.lastSwap - s.interval) / (240 * relayersCount);
+            uint relayer_allowed_index = ((now - s.lastSwap - s.interval) - multiple * (240 * relayersCount)) / 240;
             return relayers[relayer_allowed_index];
         }
         
