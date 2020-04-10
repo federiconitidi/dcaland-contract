@@ -2,6 +2,7 @@ pragma solidity ^0.5.0;
 
 import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v2.5.0/contracts/token/ERC20/IERC20.sol";
 import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v2.5.0/contracts/token/ERC20/SafeERC20.sol";
+import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v2.5.0/contracts/utils/ReentrancyGuard.sol";
 
 contract IUniswapExchange {
     // Address of ERC20 token sold on this exchange
@@ -51,7 +52,7 @@ contract IUniswapExchange {
 }
 
 
-contract DCAcontract {
+contract DCAcontract is ReentrancyGuard {
     IERC20 dai;
     address payable public creator;
     uint public fee_numerator;
@@ -151,7 +152,7 @@ contract DCAcontract {
     
 
     // allow a relayer to execute the transaction for a user and convert his DAI parcel into ETH
-    function convertParcel(address payable _user) external{
+    function convertParcel(address payable _user) external nonReentrant{
         Stream storage s = streams[_user];
         uint256 gasPrice = tx.gasprice;
         uint256 eth_bought = IUniswapExchange(0x2a1530C4C41db0B0b2bB646CB5Eb1A67b7158667).getTokenToEthInputPrice(s.parcel);
